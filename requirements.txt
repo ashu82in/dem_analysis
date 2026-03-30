@@ -1,5 +1,7 @@
 streamlit
 pandas
 numpy
-scipy
 plotly
+scipy
+statsmodels
+openpyxl
