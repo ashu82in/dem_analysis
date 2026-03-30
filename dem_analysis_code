@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy import stats
 
+
 # --- Page Config ---
 st.set_page_config(page_title="Inventory Cash Unlocker", layout="wide")
 
