@@ -1,0 +1,41 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 1. YOUR ACTUAL DATA
+historical_demand = [12, 18, 16, 28, 12, 13, 9, 30, 50, 37, 29, 33, 21, 43, 5, 34, 20, 19, 0, 0, 1, 23]
+
+# 2. ANALYSIS PHASE
+mean_demand = np.mean(historical_demand)
+std_dev = np.std(historical_demand)
+
+print(f"--- Analysis Results ---")
+print(f"Average Daily Demand: {mean_demand:.2f}")
+print(f"Volatility (Std Dev): {std_dev:.2f}")
+
+# 3. SIMULATION PHASE (Monte Carlo)
+# We simulate the next 100 days based on the 'Normal Distribution' of your data
+days_to_simulate = 100
+simulated_demand = np.random.normal(mean_demand, std_dev, days_to_simulate)
+
+# Clean up: Demand cannot be negative, so we round to whole numbers and clip at 0
+simulated_demand = np.maximum(0, np.round(simulated_demand))
+
+# 4. VISUALIZATION
+plt.figure(figsize=(12, 6))
+plt.plot(simulated_demand, marker='o', linestyle='-', color='blue', label='Simulated Daily Demand')
+plt.axhline(y=mean_demand, color='red', linestyle='--', label='Average Demand Line')
+plt.fill_between(range(days_to_simulate), mean_demand - std_dev, mean_demand + std_dev, color='red', alpha=0.1, label='Volatility Zone')
+
+plt.title(f"100-Day Demand Simulation (Based on Your Pattern Analysis)")
+plt.xlabel("Days into Future")
+plt.ylabel("Units Demanded")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+# 5. INSIGHTS FOR YOUR YOUTUBE SCRIPT
+max_simulated = np.max(simulated_demand)
+print(f"\n--- Simulation Insights ---")
+print(f"In 100 days, your peak demand could hit: {max_simulated} units")
+print(f"Suggested Safety Stock (to cover 95% of spikes): {round(1.65 * std_dev)} units")
