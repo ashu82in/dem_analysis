@@ -2,28 +2,27 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import io
+import plotly.graph_objects as go
 from scipy import stats
 from statsmodels.tsa.seasonal import seasonal_decompose
 
 # --- Page Config ---
 st.set_page_config(page_title="Inventory Cash Unlocker", layout="wide")
 
-st.title("📊 Inventory & Demand Pattern Analyzer")
+st.title("📊 Inventory Strategy & Cash Unlocker")
 st.markdown("""
-Stop stocking for the 'Average'. This tool identifies **Weekly Waves** in your demand 
-to reveal exactly how much **Frozen Cash** you can pull out of your warehouse.
+Unlock **'Frozen Cash'** by identifying predictable demand patterns. 
+This tool validates your data quality before calculating your optimal inventory levels.
 """)
 
-# --- 1. Sidebar & Sample Data Logic ---
+# --- 1. Sidebar & Data Input ---
 st.sidebar.header("1. Data Input")
 
 def get_template_df():
-    # Create a robust sample dataset (60 days) with weekly seasonality
     dates = pd.date_range(start="2026-01-01", periods=60)
-    # Pattern: Mon-Thu (Low), Fri-Sun (High)
-    pattern = np.array([12, 14, 18, 22, 48, 55, 35]) 
-    demand = [max(0, int(pattern[i % 7] + np.random.normal(0, 4) + (i * 0.1))) for i in range(60)]
+    # Weekly pattern: Mon-Thu (Low), Fri-Sun (High)
+    pattern = np.array([12, 15, 18, 22, 45, 55, 30]) 
+    demand = [max(0, int(pattern[i % 7] + np.random.normal(0, 5) + (i * 0.1))) for i in range(60)]
     return pd.DataFrame({"Date": dates, "Demand": demand})
 
 template_df = get_template_df()
@@ -31,7 +30,7 @@ template_df = get_template_df()
 st.sidebar.download_button(
     label="Download Template CSV",
     data=template_df.to_csv(index=False).encode('utf-8'),
-    file_name='demand_template.csv',
+    file_name='inventory_template.csv',
     mime='text/csv',
 )
 
@@ -56,104 +55,106 @@ else:
     st.info("Using Template Data. Upload your own file in the sidebar to analyze your business.")
     data = template_df["Demand"].values
 
-try:
-    df = pd.DataFrame(data, columns=["Demand"])
+df = pd.DataFrame(data, columns=["Demand"])
+
+# --- 3. Main Application Tabs ---
+tab1, tab2, tab3 = st.tabs(["🔍 Step 1: Normality Check", "🌊 Step 2: Seasonal Cash Unlock", "📅 Step 3: Order Playbook"])
+
+# --- TAB 1: NORMALITY ANALYSIS ---
+with tab1:
+    st.subheader("Statistical Health Check")
+    st.write("Before we calculate safety stock, we must see if your demand follows a standard 'Bell Curve' or if it is 'Lumpy'.")
     
-    # Seasonality & Trend Analysis
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        # Histogram with KDE
+        fig_hist = px.histogram(df, x="Demand", marginal="box", nbins=20, 
+                               title="Distribution of Demand",
+                               color_discrete_sequence=['#3182CE'])
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+    with col_b:
+        # Q-Q Plot Logic
+        # We'll use a scatter plot to simulate a Q-Q plot
+        sorted_data = np.sort(data)
+        norm = stats.norm.ppf(np.linspace(0.01, 0.99, len(data)))
+        fig_qq = px.scatter(x=norm, y=sorted_data, labels={'x': 'Theoretical Quantiles', 'y': 'Sample Quantiles'},
+                           title="Q-Q Plot (Points should stay on the diagonal line)")
+        fig_qq.add_shape(type="line", x0=min(norm), y0=min(sorted_data), x1=max(norm), y1=max(sorted_data),
+                        line=dict(color="Red", dash="dash"))
+        st.plotly_chart(fig_qq, use_container_width=True)
+
+    # Normality Test Result
+    shapiro_p = stats.shapiro(data)[1]
+    if shapiro_p > 0.05:
+        st.success(f"✅ **Your data is Normally Distributed (p={shapiro_p:.3f}).** Standard inventory math will be highly accurate.")
+    else:
+        st.warning(f"⚠️ **Non-Normal Distribution Detected (p={shapiro_p:.3f}).** Your demand has outliers or strong cycles. Moving to Step 2 to isolate these cycles is highly recommended.")
+
+# --- TAB 2: SEASONAL CASH UNLOCK ---
+with tab2:
+    st.subheader("Isolating Predictable Waves")
+    
+    # Seasonality Logic
     has_seasonality = False
     if len(data) >= 14:
-        # Period 7 for Weekly cycles
         decomp = seasonal_decompose(df['Demand'], model='additive', period=7, extrapolate_trend='freq')
-        df['Seasonal'] = decomp.seasonal
-        df['Trend'] = decomp.trend
-        df['Resid'] = decomp.resid
+        df['Seasonal'], df['Trend'], df['Resid'] = decomp.seasonal, decomp.trend, decomp.resid
         
-        # Check Seasonality Strength
         resid_var = np.var(df['Resid'].dropna())
         total_var = np.var(df['Demand'] - df['Trend'])
-        if (1 - (resid_var / total_var)) > 0.3: # Threshold for detection
+        if (1 - (resid_var / total_var)) > 0.3:
             has_seasonality = True
 
-    # --- 3. The "Dynamic Cash" Math ---
+    # Calculations
     mean_val = np.mean(data)
-    # Use standard deviation of residuals (the unpredicted noise)
-    std_noise = np.std(df['Resid'].dropna()) if has_seasonality else np.std(data)
+    std_standard = np.std(data)
+    std_resid = np.std(df['Resid'].dropna()) if has_seasonality else std_standard
     
-    # Base buffer for unpredictable noise
-    base_ss = z_score * std_noise * np.sqrt(lead_time)
-    
-    # Weekly Indexing
-    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    if has_seasonality:
-        seasonal_pattern = df['Seasonal'].iloc[:7].values
-        seasonal_indices = (mean_val + seasonal_pattern) / mean_val
-    else:
-        seasonal_indices = np.ones(7)
+    # Safety Stock Comparison
+    ss_static = round(z_score * std_standard * np.sqrt(lead_time))
+    ss_optimized = round(z_score * std_resid * np.sqrt(lead_time))
+    cash_saved = (ss_static - ss_optimized) * unit_cost
 
-    # Calculation for Dashboard
-    ss_standard = round(z_score * np.std(data) * np.sqrt(lead_time))
-    ss_dynamic_avg = round(base_ss * np.mean(seasonal_indices))
-    cash_unlocked = (ss_standard - ss_dynamic_avg) * unit_cost
-
-    # --- 4. Main Dashboard Metrics ---
     m1, m2, m3 = st.columns(3)
-    m1.metric("Average Daily Demand", f"{mean_val:.1f} units")
-    m2.metric("Optimal Safety Stock (Avg)", f"{ss_dynamic_avg} units", f"{- (ss_standard - ss_dynamic_avg)} vs Static")
-    m3.metric("Potential Cash Unlocked", f"₹{max(0, cash_unlocked):,}", delta="Working Capital", delta_color="normal")
+    m1.metric("Current Volatility (Raw)", f"{std_standard:.2f}")
+    m2.metric("True Noise (After Seasonality)", f"{std_resid:.2f}", f"{-((std_standard-std_resid)/std_standard)*100:.1f}% Reduction")
+    m3.metric("Capital to Unlock", f"₹{max(0, cash_saved):,}", "Frozen Cash")
 
-    # --- 5. Tabs & Visuals ---
-    tabs = st.tabs(["📉 Trend & Normality", "📅 Weekly Playbook", "🔮 Stress Test Simulation"])
+    fig_decomp = px.line(df, y=["Demand", "Trend"], title="Demand Trend Analysis",
+                        color_discrete_map={"Demand": "#CBD5E0", "Trend": "#3182CE"})
+    st.plotly_chart(fig_decomp, use_container_width=True)
+
+# --- TAB 3: ORDER PLAYBOOK ---
+with tab3:
+    st.subheader("Your Reorder Schedule")
     
-    with tabs[0]:
-        st.subheader("Long-term Growth vs. Noise")
-        fig_trend = px.line(df, y=["Demand", "Trend"], 
-                           color_discrete_map={"Demand": "#CBD5E0", "Trend": "#3182CE"},
-                           title="Is the business growing or shrinking?")
-        st.plotly_chart(fig_trend, use_container_width=True)
-        
-        # Normality Check
-        check_data = df['Resid'].dropna() if has_seasonality else data
-        shapiro_p = stats.shapiro(check_data)[1]
-        if shapiro_p > 0.05:
-            st.success(f"✅ **Statistical Reliability High:** Noise is normally distributed (p={shapiro_p:.2f}).")
+    # Dynamic ROP Calculation
+    # ROP = (Demand during Lead Time) + Safety Stock
+    # Since Lead Time is 7 days, we use a 7-day rolling window
+    rop_base = (mean_val * lead_time) + ss_optimized
+    
+    st.info(f"💡 **Lead Time shock absorber:** With a {lead_time}-day lead time, your daily spikes are smoothed. However, we still use the 'True Noise' to keep your safety stock low.")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.write("**Dynamic Reorder Points**")
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        if has_seasonality:
+            seasonal_pattern = df['Seasonal'].iloc[:7].values
+            # Reorder point changes based on what day of the week it is
+            rop_list = [round(rop_base + p) for p in seasonal_pattern]
         else:
-            st.warning(f"⚠️ **Irregular Volatility:** Demand has 'fat tails' (p={shapiro_p:.2f}). Consider adding 5-10% extra buffer.")
-
-    with tabs[1]:
-        st.subheader("Your 7-Day Inventory Schedule")
-        schedule_list = []
-        for i, day_name in enumerate(days):
-            daily_ss = round(base_ss * seasonal_indices[i])
-            schedule_list.append({"Day": day_name, "Safety Stock": daily_ss, "Value (₹)": f"₹{daily_ss * unit_cost:,}"})
-        
-        sched_df = pd.DataFrame(schedule_list)
-        
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.table(sched_df)
-        with c2:
-            fig_wave = px.line(sched_df, x="Day", y="Safety Stock", title="The Safety Stock Wave", markers=True)
-            fig_wave.update_traces(fill='tozeroy', line_color='#3182CE')
-            st.plotly_chart(fig_wave, use_container_width=True)
-
-    with tabs[2]:
-        st.subheader("Monte Carlo Simulation (30 Days)")
-        sim_days = 30
-        sim_results = []
-        pattern = df['Seasonal'].iloc[:7].values if has_seasonality else np.zeros(7)
-        
-        for i in range(sim_days):
-            # Base + Seasonality + Random Noise
-            d = max(0, mean_val + pattern[i % 7] + np.random.normal(0, std_noise))
-            sim_results.append(round(d))
+            rop_list = [round(rop_base)] * 7
             
-        sim_df = pd.DataFrame({"Day": range(1, sim_days+1), "Forecasted_Demand": sim_results})
-        fig_sim = px.line(sim_df, x="Day", y="Forecasted_Demand", title="Future Forecast includes Weekly Cycles")
-        fig_sim.add_hline(y=mean_val, line_dash="dash", annotation_text="Average")
+        rop_df = pd.DataFrame({"Day": days, "Reorder Point (Units)": rop_list})
+        st.table(rop_df)
+        
+    with col2:
+        fig_sim = px.line(x=days, y=rop_list, title="When to Order: The ROP Wave", markers=True)
+        fig_sim.update_layout(yaxis_title="Units in Stock")
         st.plotly_chart(fig_sim, use_container_width=True)
 
-    st.divider()
-    st.info(f"**Actionable Insight:** By switching to a dynamic strategy, you shift inventory from slow days to peak days. This protects your service level while freeing up **₹{max(0, cash_unlocked):,}** in cash.")
-
-except Exception as e:
-    st.error(f"Something went wrong with the data processing: {e}")
+    st.success(f"**Final Insight:** By removing seasonal 'noise' from your risk calculation, you can safely operate with **{ss_static - ss_optimized} fewer units** on average, saving you **₹{max(0, cash_saved):,}** without increasing stockout risk.")
