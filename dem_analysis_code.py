@@ -2,20 +2,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 from scipy import stats
-from scipy.stats import poisson, kstest
+from scipy.stats import kstest, norm, lognorm, gamma, poisson
 
 # --- Page Config ---
-st.set_page_config(page_title="Universal Supply Chain DNA", layout="wide")
+st.set_page_config(page_title="Supply Chain DNA: Synchronized", layout="wide")
 
-st.title("🎯 Universal Demand DNA & Optimizer")
+st.title("🎯 Synchronized Demand DNA & Optimizer")
 st.markdown("""
-Identifying the **best-fit distribution** for your data. 
-Testing for **Normal, Lognormal, Gamma, and Poisson** patterns.
+This version uses the **Kolmogorov-Smirnov (K-S) Test** for consistency and includes 
+a **Data Export** section to view the raw bucketed volumes.
 """)
 
-# --- 1. Sidebar: Data & Logic ---
+# --- 1. Sidebar ---
 st.sidebar.header("1. Data Input")
 uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
@@ -48,13 +47,13 @@ if uploaded_file:
         st.stop()
 else:
     t = pd.date_range(start="2026-01-01", periods=365)
-    lumpy = [np.random.lognormal(mean=7, sigma=1) if np.random.random() > 0.85 else 0 for _ in range(365)]
+    lumpy = [np.random.lognormal(mean=7, sigma=1) if np.random.random() > 0.8 else 0 for _ in range(365)]
     data_series_daily = pd.Series(lumpy, index=t)
-    st.info("💡 Using sample 'Distributor' data.")
+    st.info("💡 Using sample data for demonstration.")
 
-# --- 2. OPTIMIZATION LOOP ---
+# --- 2. SYNCHRONIZED OPTIMIZATION LOOP ---
 results = []
-with st.spinner("Analyzing all scenarios..."):
+with st.spinner("Analyzing scenarios..."):
     for w in range(1, max_test_window + 1):
         for o in range(w):
             temp_start = data_series_daily.index.min() + pd.Timedelta(days=o)
@@ -63,44 +62,41 @@ with st.spinner("Analyzing all scenarios..."):
             test_data = clubbed[clubbed > 0] if ignore_zeros else clubbed
             
             if len(test_data) >= 3 and test_data.std() > 0:
-                _, p = stats.shapiro(test_data)
+                params = norm.fit(test_data)
+                _, p = kstest(test_data, 'norm', args=params)
                 results.append({'Window': w, 'Offset': o, 'p_value': p})
 
 df_opt = pd.DataFrame(results)
 
 # --- 3. DASHBOARD TABS ---
-tab1, tab2 = st.tabs(["🚀 Scenario Leaderboard", "🔬 Surgical DNA Matcher"])
+tab1, tab2, tab3 = st.tabs(["🚀 Scenario Leaderboard", "🔬 Surgical DNA Matcher", "📊 Raw Bucket Data"])
 
 with tab1:
-    st.subheader(f"🏆 Top Predictable Windows (p > {p_threshold})")
+    st.subheader(f"🏆 Top Predictable Windows (K-S p > {p_threshold})")
     df_leaderboard = df_opt[df_opt['p_value'] > p_threshold].sort_values(by='p_value', ascending=False)
     
     if not df_leaderboard.empty:
-        # UPDATED: width='stretch' replaces use_container_width
-        st.dataframe(df_leaderboard.head(10), width='stretch', hide_index=True)
+        st.dataframe(df_leaderboard.head(15), width='stretch', hide_index=True)
     else:
-        st.warning("⚠️ No 'Normal' windows found.")
+        st.warning("No scenarios found with p > 0.05. Demand remains erratic.")
 
     fig_heat = px.density_heatmap(df_opt, x="Offset", y="Window", z="p_value", 
-                                 title="Predictability Heatmap", color_continuous_scale="Viridis")
-    # UPDATED: width='stretch' replaces use_container_width
+                                 title="Predictability Heatmap (K-S Method)", color_continuous_scale="Viridis")
     st.plotly_chart(fig_heat, width='stretch')
+
+# Define the selected data globally so Tab 3 can access it
+best_w = int(df_leaderboard.iloc[0]['Window']) if not df_leaderboard.empty else 7
+best_o = int(df_leaderboard.iloc[0]['Offset']) if not df_leaderboard.empty else 0
 
 with tab2:
     st.subheader("Distribution DNA Matching")
-    
     c_s1, c_s2 = st.columns(2)
-    best_w = int(df_leaderboard.iloc[0]['Window']) if not df_leaderboard.empty else 7
-    best_o = int(df_leaderboard.iloc[0]['Offset']) if not df_leaderboard.empty else 0
-    
     with c_s1:
         sel_w = st.slider("Select Window Size", 1, max_test_window, best_w)
     with c_s2:
-        # --- THE FIX FOR THE SLIDER ERROR ---
         if sel_w > 1:
             sel_o = st.slider("Select Offset", 0, sel_w-1, best_o if best_o < sel_w else 0)
         else:
-            st.info("Offset: 0 (Window is 1 day)")
             sel_o = 0
 
     final_start = data_series_daily.index.min() + pd.Timedelta(days=sel_o)
@@ -124,13 +120,31 @@ with tab2:
         except: continue
 
     df_dist = pd.DataFrame(dist_results).sort_values(by="p-value", ascending=False)
-    st.info(f"🧬 DNA Match: **{df_dist.iloc[0]['Distribution'].upper()}**")
+    st.info(f"🧬 DNA Match for {sel_w}D Window: **{df_dist.iloc[0]['Distribution'].upper()}**")
     st.table(df_dist)
 
     v1, v2 = st.columns(2)
     with v1:
-        # UPDATED: width='stretch' replaces use_container_width
         st.plotly_chart(px.bar(final_series, title="Bucket Timeline"), width='stretch')
     with v2:
-        # UPDATED: width='stretch' replaces use_container_width
-        st.plotly_chart(px.histogram(fit_data, nbins=15, title="Distribution Shape"), width='stretch')
+        st.plotly_chart(px.histogram(fit_data, nbins=15, title="Distribution Shape (Spikes Only)"), width='stretch')
+
+with tab3:
+    st.subheader(f"Detailed View: {sel_w}-Day Window")
+    st.write("This table shows the exact demand volume aggregated for each time bucket.")
+    
+    # Format the bucket data for the user
+    df_buckets = final_series.reset_index()
+    df_buckets.columns = ['Period Start Date', 'Aggregated Demand']
+    
+    # Add some helpful stats
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Buckets", len(df_buckets))
+    col2.metric("Avg Demand/Bucket", f"{df_buckets['Aggregated Demand'].mean():.2f}")
+    col3.metric("Max Spike", f"{df_buckets['Aggregated Demand'].max():.0f}")
+
+    st.dataframe(df_buckets, width='stretch', hide_index=True)
+    
+    # Download option
+    csv = df_buckets.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Bucket Data", csv, f"demand_buckets_{sel_w}d.csv", "text/csv")
