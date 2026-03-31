@@ -11,26 +11,47 @@ st.set_page_config(page_title="Demand DNA Analyzer", layout="wide")
 
 st.title("🧬 Demand DNA: The Surgical Diagnostic")
 st.markdown("""
-Standard math checks the **Raw Data** for risk. **We check the 'Noise'.** By removing Trend and Seasonality first, we reveal your *True Unpredictability*.
+This tool strips away the **Trend** and **Seasonality** from your data to reveal the **True Noise**. 
+By testing the 'Noise' for normality, we calculate the most accurate risk level for your inventory.
 """)
 
-# --- Sidebar: Data Input ---
+# --- 1. Sidebar: Advanced File Input ---
 st.sidebar.header("1. Upload Data")
-uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+
+# Global variable for the processed data
+data_series = None
 
 if uploaded_file:
-    df_raw = pd.read_csv(uploaded_file)
-    col = st.sidebar.selectbox("Select Demand Column", df_raw.columns)
-    data_series = pd.to_numeric(df_raw[col], errors='coerce').dropna()
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            df_raw = pd.read_csv(uploaded_file)
+            col = st.sidebar.selectbox("Select Demand Column", df_raw.columns)
+            data_series = pd.to_numeric(df_raw[col], errors='coerce').dropna()
+        else:
+            # Excel Logic with Sheet Selection
+            xl = pd.ExcelFile(uploaded_file)
+            sheet = st.sidebar.selectbox("Select Excel Sheet", xl.sheet_names)
+            df_raw = xl.parse(sheet)
+            col = st.sidebar.selectbox("Select Demand Column", df_raw.columns)
+            data_series = pd.to_numeric(df_raw[col], errors='coerce').dropna()
+            
+        if data_series.empty:
+            st.error("The selected column/sheet contains no numeric data.")
+            st.stop()
+            
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        st.stop()
 else:
-    # Create a "Surgical" Sample: Trend + Season + Normal Noise
+    # Default Sample Data: Growth + Weekly Seasonality + Normal Noise
     t = np.arange(100)
     data = 50 + (0.5 * t) + (15 * np.sin(2 * np.pi * t / 7)) + np.random.normal(0, 5, 100)
     data_series = pd.Series(data)
-    st.info("Using sample data (Growth + Weekly Wave). Upload your own for custom analysis.")
+    st.info("💡 Using sample data. Upload your .csv or .xlsx to begin.")
 
-# --- 2. The Surgical Decomposition ---
-# We use a 7-day period for weekly business cycles
+# --- 2. Surgical Decomposition ---
+# Assuming a 7-day period for standard weekly business cycles
 decomp = seasonal_decompose(data_series, model='additive', period=7, extrapolate_trend='freq')
 
 df = pd.DataFrame({
@@ -44,37 +65,34 @@ df = pd.DataFrame({
 tab1, tab2 = st.tabs(["📉 Step 1: Strip the Patterns", "🔬 Step 2: Analyze the 'Noise' (True Risk)"])
 
 with tab1:
-    st.subheader("Peeling the Layers")
-    st.write("We separate your demand into the three layers of the 'Business Sandwich'.")
+    st.subheader("Peeling the Business Layers")
+    st.write("We separate your daily demand into three distinct layers to find what's predictable.")
     
-    # Layered Plot
     fig_layers = go.Figure()
-    fig_layers.add_trace(go.Scatter(y=df['Actual'], name="1. Raw Demand", line=dict(color='#CBD5E0')))
+    fig_layers.add_trace(go.Scatter(y=df['Actual'], name="1. Raw Demand", line=dict(color='#CBD5E0', width=1)))
     fig_layers.add_trace(go.Scatter(y=df['Trend'], name="2. The Trend (Growth)", line=dict(color='#3182CE', width=4)))
-    fig_layers.add_trace(go.Scatter(y=df['Seasonal'], name="3. The Wave (Seasonality)", line=dict(color='#F6AD55')))
+    fig_layers.add_trace(go.Scatter(y=df['Seasonal'], name="3. The Wave (Seasonality)", line=dict(color='#F6AD55', width=2)))
     
-    fig_layers.update_layout(title="Decomposing your Business Signal", xaxis_title="Days")
+    fig_layers.update_layout(title="Signal Decomposition", xaxis_title="Time (Days)", yaxis_title="Units")
     st.plotly_chart(fig_layers, use_container_width=True)
     
-    st.info("💡 **Why do this?** If we only looked at 'Raw Demand', the Friday spikes would look like 'Risk'. By peeling them away, we see they are just a 'Pattern'.")
+    st.info("**Insight:** The Blue line is your long-term direction. The Orange line is your repeating weekly cycle. Everything else is 'Noise'.")
 
 with tab2:
     st.subheader("The Residual Analysis (The 'Noise')")
-    st.write("This is what's left after removing the Trend and Seasonality. This is your **True Risk**.")
+    st.write("This is the 'Static' left after the patterns are gone. This is your **True Risk**.")
     
-    # Clean the residuals for testing
     noise = df['Residual'].dropna()
     
     col_a, col_b = st.columns(2)
     
     with col_a:
-        # Histogram of NOISE
-        fig_hist = px.histogram(noise, nbins=20, title="Distribution of the 'Noise'",
+        fig_hist = px.histogram(noise, nbins=20, title="Distribution of the Noise",
                                 color_discrete_sequence=['#38A169'])
         st.plotly_chart(fig_hist, use_container_width=True)
         
     with col_b:
-        # Q-Q Plot of NOISE
+        # Q-Q Plot
         sorted_noise = np.sort(noise)
         norm = stats.norm.ppf(np.linspace(0.01, 0.99, len(noise)))
         fig_qq = px.scatter(x=norm, y=sorted_noise, title="Q-Q Plot: Is the Noise Normal?")
@@ -84,23 +102,20 @@ with tab2:
 
     # --- THE FINAL VERDICT ---
     shapiro_p = stats.shapiro(noise)[1]
+    resid_var = np.var(noise)
+    total_var = np.var(df['Actual'] - df['Trend'])
+    strength = max(0, (1 - (resid_var / total_var)) * 100)
     
     st.divider()
     st.subheader("The Statistical Verdict")
     
     v1, v2 = st.columns(2)
-    
-    # Seasonality Strength
-    resid_var = np.var(noise)
-    total_var = np.var(df['Actual'] - df['Trend'])
-    strength = max(0, (1 - (resid_var / total_var)) * 100)
     v1.metric("Predictability (Seasonality)", f"{strength:.1f}%")
     
-    # Normality of Noise
     is_normal = shapiro_p > 0.05
     v2.metric("Noise Consistency (Normality)", "Normal" if is_normal else "Irregular", f"p={shapiro_p:.3f}")
     
     if is_normal:
-        st.success("**Ready to Unlock Cash:** Your noise is consistent. Standard safety stock math on these residuals will safely minimize your inventory.")
+        st.success("**Ready to Unlock Cash:** Your noise is predictable and consistent. You can safely lower your safety stock buffers.")
     else:
-        st.warning("**Proceed with Caution:** Your noise is irregular. Even after removing patterns, you have unpredictable 'freak events'. Keep a slightly higher buffer.")
+        st.warning("**Watch for Outliers:** Your noise is irregular. This means you have frequent 'freak spikes' that require a larger safety buffer.")
