@@ -2,17 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from scipy import stats
 from scipy.stats import kstest, norm, lognorm, gamma, poisson
 from statsmodels.tsa.seasonal import seasonal_decompose
 
 # --- Page Config ---
-st.set_page_config(page_title="Supply Chain DNA: Surgical Decomposition", layout="wide")
+st.set_page_config(page_title="Supply Chain DNA: Surgical decomposition", layout="wide")
 
-st.title("🎯 Demand DNA: Surgical Decomposition")
+st.title("🎯 Demand DNA: Surgical Decomposition Engine")
 st.markdown("""
-This version allows you to **remove Trend and Seasonality** before testing the distribution. 
-By testing only the **Residuals**, we find the true 'Uncertainty' of your supply chain.
+This tool separates **Trend** and **Seasonality** from your data to test the **Residuals** (the true random noise). 
+This often results in much higher p-values and a better 'Golden Window' match.
 """)
 
 # --- 1. Sidebar ---
@@ -20,9 +21,9 @@ st.sidebar.header("1. Data Input")
 uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 st.sidebar.header("2. Analysis Mode")
-analysis_mode = st.sidebar.selectbox("What should we test?", 
-                                     ["Raw Demand", "Residuals (Demand minus Trend/Seasonality)"],
-                                     help="Residuals represent the 'Pure Randomness' left after removing patterns.")
+analysis_mode = st.sidebar.selectbox("Analysis Target", 
+                                     ["Raw Demand", "Residuals (Noise Only)"],
+                                     help="Residuals = Raw Demand - (Trend + Seasonality)")
 
 st.sidebar.header("3. Optimization Settings")
 max_test_window = st.sidebar.slider("Max Window to Test (Days)", 7, 30, 30)
@@ -46,30 +47,28 @@ if uploaded_file:
         full_range = pd.date_range(start=df_daily.index.min(), end=df_daily.index.max(), freq='D')
         data_series_daily = df_daily.reindex(full_range, fill_value=0)
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error loading file: {e}")
         st.stop()
 else:
-    # Generate Sample Data with a strong Trend and Seasonality
     t = pd.date_range(start="2026-01-01", periods=365)
-    trend = np.linspace(100, 500, 365)
-    seasonal = 200 * np.sin(2 * np.pi * t.dayofyear / 30)
-    noise = np.random.normal(0, 50, 365)
+    trend = np.linspace(50, 300, 365)
+    seasonal = 150 * np.sin(2 * np.pi * t.dayofyear / 30)
+    noise = np.random.lognormal(mean=4, sigma=0.8, size=365)
     data_series_daily = pd.Series(trend + seasonal + noise, index=t).clip(lower=0)
-    st.info("💡 Using sample data with Trend and Seasonality.")
+    st.info("💡 Using sample data. Upload your file to begin.")
 
-# --- 2. THE SURGICAL LOOP ---
+# --- 2. OPTIMIZATION LOOP ---
 results = []
-with st.spinner("Decomposing and Testing..."):
+with st.spinner("Surgically analyzing scenarios..."):
     for w in range(1, max_test_window + 1):
         for o in range(w):
             temp_start = data_series_daily.index.min() + pd.Timedelta(days=o)
             temp_data = data_series_daily[data_series_daily.index >= temp_start]
             clubbed = temp_data.resample(f'{w}D').sum()
             
-            # --- DECOMPOSITION LOGIC ---
-            if "Residuals" in analysis_mode and len(clubbed) > 14:
+            # --- Conditional Decomposition ---
+            if "Residuals" in analysis_mode and len(clubbed) > 10:
                 try:
-                    # Period 4 for monthly/weekly patterns depending on window
                     decomp = seasonal_decompose(clubbed, model='additive', period=4)
                     processed_data = decomp.resid.dropna()
                 except:
@@ -87,15 +86,15 @@ with st.spinner("Decomposing and Testing..."):
 df_opt = pd.DataFrame(results)
 
 # --- 3. TABS ---
-tab1, tab2, tab3 = st.tabs(["🚀 Scenario Leaderboard", "🔬 DNA Matcher", "📉 Decomposition Plot"])
+tab1, tab2, tab3, tab4 = st.tabs(["🚀 Leaderboard", "🔬 DNA Matcher", "📉 Surgical Decomposition", "📊 Raw Buckets"])
 
 with tab1:
     df_leaderboard = df_opt[df_opt['p_value'] > 0.05].sort_values(by='p_value', ascending=False)
-    st.subheader(f"🏆 Top Windows for {analysis_mode}")
+    st.subheader(f"Top Predictable Windows for {analysis_mode}")
     if not df_leaderboard.empty:
         st.dataframe(df_leaderboard.head(10), width='stretch', hide_index=True)
     else:
-        st.warning("Even after decomposition, no Normal scenarios were found. Try a different DNA match.")
+        st.warning("No Normal scenarios found. Try checking 'Residuals' mode in the sidebar.")
     
     fig_heat = px.density_heatmap(df_opt, x="Offset", y="Window", z="p_value", color_continuous_scale="Viridis")
     st.plotly_chart(fig_heat, width='stretch')
@@ -104,22 +103,29 @@ with tab2:
     best_w = int(df_leaderboard.iloc[0]['Window']) if not df_leaderboard.empty else 7
     best_o = int(df_leaderboard.iloc[0]['Offset']) if not df_leaderboard.empty else 0
     
-    col1, col2 = st.columns(2)
-    sel_w = col1.slider("Window Size", 1, max_test_window, best_w)
-    sel_o = col2.slider("Offset", 0, sel_w-1 if sel_w > 1 else 0, best_o if best_o < sel_w else 0)
+    c1, c2 = st.columns(2)
+    sel_w = c1.slider("Window Size (Days)", 1, max_test_window, best_w)
+    
+    # --- RECTIFIED OFFSET LOGIC (No more Range 0,0 Error) ---
+    if sel_w > 1:
+        sel_o = c2.slider("Start Offset (Days)", 0, sel_w-1, best_o if best_o < sel_w else 0)
+    else:
+        c2.info("Offset fixed at 0 for 1-day window.")
+        sel_o = 0
 
     final_series = data_series_daily.resample(f"{sel_w}D").sum()
     
-    # Process the specific data for DNA Matching
-    if "Residuals" in analysis_mode and len(final_series) > 14:
-        decomp_final = seasonal_decompose(final_series, model='additive', period=4)
-        dna_data = decomp_final.resid.dropna()
+    if "Residuals" in analysis_mode and len(final_series) > 10:
+        try:
+            decomp_final = seasonal_decompose(final_series, model='additive', period=4)
+            dna_data = decomp_final.resid.dropna()
+        except: dna_data = final_series
     else:
         dna_data = final_series
     
     fit_data = dna_data[dna_data > 0] if ignore_zeros else dna_data
 
-    # DNA Test Loop
+    # DNA Testing Loop
     dist_names = ["norm", "lognorm", "gamma", "poisson"]
     dist_results = []
     for name in dist_names:
@@ -136,18 +142,31 @@ with tab2:
         except: continue
 
     df_dist = pd.DataFrame(dist_results).sort_values(by="p-value", ascending=False)
-    st.info(f"🧬 DNA Match for {analysis_mode}: **{df_dist.iloc[0]['Distribution'].upper()}**")
+    st.info(f"🧬 Winner: **{df_dist.iloc[0]['Distribution'].upper()}**")
     st.table(df_dist)
     
     v1, v2 = st.columns(2)
-    v1.plotly_chart(px.bar(dna_data, title=f"{analysis_mode} Timeline"), width='stretch')
+    v1.plotly_chart(px.bar(dna_data, title=f"{analysis_mode} View"), width='stretch')
     v2.plotly_chart(px.histogram(fit_data, nbins=15, title="Distribution Shape"), width='stretch')
 
 with tab3:
-    st.subheader("Visual Decomposition")
-    if len(final_series) > 14:
-        # Show what the Trend and Seasonality actually look like
-        fig_decomp = seasonal_decompose(final_series, model='additive', period=4).plot()
-        st.pyplot(fig_decomp)
-    else:
-        st.info("Not enough data points in this window to perform a visual decomposition.")
+    st.subheader("🔬 Interactive Decomposition Breakdown")
+    if len(final_series) > 10:
+        try:
+            res = seasonal_decompose(final_series, model='additive', period=4)
+            fig_clean = go.Figure()
+            fig_clean.add_trace(go.Scatter(x=res.observed.index, y=res.observed, name="1. Raw Demand", line=dict(color="#CBD5E0")))
+            fig_clean.add_trace(go.Scatter(x=res.trend.index, y=res.trend, name="2. Trend (Signal)", line=dict(color="#3182CE", width=3)))
+            fig_clean.add_trace(go.Scatter(x=res.seasonal.index, y=res.seasonal, name="3. Seasonality (Rhythm)", line=dict(color="#805AD5", dash='dot')))
+            fig_clean.add_trace(go.Scatter(x=res.resid.index, y=res.resid, name="4. Residuals (DNA Source)", mode='markers', marker=dict(color="#E53E3E")))
+            fig_clean.update_layout(height=500, legend_orientation="h", margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig_clean, width='stretch')
+        except: st.warning("Pattern too short to decompose.")
+    else: st.info("Increase window size to see decomposition components.")
+
+with tab4:
+    st.subheader("📊 Raw Bucket Window Data")
+    df_raw_view = final_series.reset_index()
+    df_raw_view.columns = ['Start Date', 'Volume']
+    st.write(f"Showing demand aggregated into {sel_w}-day windows.")
+    st.dataframe(df_raw_view, width='stretch', hide_index=True)
