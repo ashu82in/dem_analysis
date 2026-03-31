@@ -5,18 +5,19 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy import stats
 from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # --- Page Config ---
-st.set_page_config(page_title="Demand DNA Analyzer", layout="wide")
+st.set_page_config(page_title="Demand DNA & Forecast", layout="wide")
 
-st.title("🧬 Demand DNA: The Surgical Diagnostic")
+st.title("🧬 Demand DNA: Surgical Diagnostic & Forecast")
 st.markdown("""
-This diagnostic strips away the **Trend** and **Seasonality** to reveal your **True Noise**. 
-By testing the 'Noise' for normality, we calculate the most accurate risk level for your inventory.
+We strip away **Trend** and **Seasonality** from **Order Demand** to reveal the **True Noise**. 
+This version includes a distribution analysis to visualize your "Shape of Risk."
 """)
 
-# --- 1. Sidebar: Excel & CSV Input ---
-st.sidebar.header("1. Upload Data")
+# --- 1. Sidebar: Data Input ---
+st.sidebar.header("1. Data Input")
 uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 data_series = None
@@ -26,36 +27,26 @@ if uploaded_file:
         if uploaded_file.name.endswith('.csv'):
             df_raw = pd.read_csv(uploaded_file)
         else:
-            # Handle Excel with multiple sheets
             xl = pd.ExcelFile(uploaded_file)
-            sheet = st.sidebar.selectbox("Select Excel Sheet", xl.sheet_names)
+            sheet = st.sidebar.selectbox("Select Sheet", xl.sheet_names)
             df_raw = xl.parse(sheet)
         
-        # Look for "Order Demand" automatically
-        default_col = "Order_Demand" if "Order_Demand" in df_raw.columns else df_raw.columns[0]
-        col = st.sidebar.selectbox("Select Demand Column", df_raw.columns, index=list(df_raw.columns).index(default_col))
-        
-        # Process numeric data
+        # Auto-detect "Order Demand"
+        default_col = "Order Demand" if "Order Demand" in df_raw.columns else df_raw.columns[0]
+        col = st.sidebar.selectbox("Select Column", df_raw.columns, index=list(df_raw.columns).index(default_col))
         data_series = pd.to_numeric(df_raw[col], errors='coerce').dropna()
-        
-        if data_series.empty:
-            st.error(f"The column '{col}' contains no numeric data. Please check your file.")
-            st.stop()
-            
     except Exception as e:
-        st.error(f"Error loading file: {e}")
+        st.error(f"Error: {e}")
         st.stop()
 else:
-    # Default Sample Data (Trend + Seasonality + Noise)
-    t = np.arange(100)
-    data = 50 + (0.4 * t) + (12 * np.sin(2 * np.pi * t / 7)) + np.random.normal(0, 4, 100)
+    # Sample Data
+    t = np.arange(120)
+    data = 50 + (0.5 * t) + (15 * np.sin(2 * np.pi * t / 7)) + np.random.normal(0, 5, 120)
     data_series = pd.Series(data)
-    st.info("💡 No file uploaded. Using sample data. Upload your file to analyze 'Order_Demand'.")
+    st.info("💡 Using sample data. Upload your file to analyze 'Order Demand'.")
 
 # --- 2. Surgical Decomposition ---
-# Period 7 for Weekly cycles
 decomp = seasonal_decompose(data_series, model='additive', period=7, extrapolate_trend='freq')
-
 df = pd.DataFrame({
     'Actual': data_series.values,
     'Trend': decomp.trend.values,
@@ -63,59 +54,52 @@ df = pd.DataFrame({
     'Residual': decomp.resid.values
 })
 
-# --- 3. Dashboard Tabs ---
-tab1, tab2 = st.tabs(["📉 Step 1: Strip the Patterns", "🔬 Step 2: Analyze the 'Noise' (True Risk)"])
+# --- 3. Tabs ---
+tab1, tab2, tab3 = st.tabs(["📉 Step 1: Trend & Waves", "📊 Step 2: Distribution (Histograms)", "🔮 Step 3: 12-Month Forecast"])
 
 with tab1:
-    st.subheader("Peeling the Business Layers")
-    st.write("We separate 'Order Demand' into three distinct layers to identify what is predictable.")
-    
+    st.subheader("The Business Signal")
     fig_layers = go.Figure()
-    fig_layers.add_trace(go.Scatter(y=df['Actual'], name="1. Raw Demand", line=dict(color='#CBD5E0', width=1)))
-    fig_layers.add_trace(go.Scatter(y=df['Trend'], name="2. The Trend (Growth)", line=dict(color='#3182CE', width=4)))
-    fig_layers.add_trace(go.Scatter(y=df['Seasonal'], name="3. The Wave (Seasonality)", line=dict(color='#F6AD55', width=2)))
-    
-    fig_layers.update_layout(title="Signal Decomposition", xaxis_title="Time (Days)", yaxis_title="Units")
+    fig_layers.add_trace(go.Scatter(y=df['Actual'], name="Actual Demand", line=dict(color='#CBD5E0', width=1)))
+    fig_layers.add_trace(go.Scatter(y=df['Trend'], name="Growth Trend", line=dict(color='#3182CE', width=4)))
+    fig_layers.add_trace(go.Scatter(y=df['Seasonal'], name="Weekly Wave", line=dict(color='#F6AD55', width=2)))
     st.plotly_chart(fig_layers, use_container_width=True)
-    
-    st.info("**The Logic:** The Blue line is your direction; the Orange line is your cycle. The leftover 'Static' is the only thing that requires Safety Stock.")
 
 with tab2:
-    st.subheader("The Residual Analysis (The 'Noise')")
-    st.write("This is the 'Static' left after the patterns are gone. We test this for **Normality**.")
+    st.subheader("The Shape of Risk (Histograms)")
+    col_left, col_right = st.columns(2)
     
-    noise = df['Residual'].dropna()
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        fig_hist = px.histogram(noise, nbins=20, title="Distribution of the Noise", color_discrete_sequence=['#38A169'])
-        st.plotly_chart(fig_hist, use_container_width=True)
+    with col_left:
+        st.write("**A. Raw Demand Distribution**")
+        st.write("This shows how unpredictable your orders look *before* the analysis.")
+        fig_hist_raw = px.histogram(df, x="Actual", nbins=30, color_discrete_sequence=['#CBD5E0'],
+                                   title="Raw Order Demand")
+        st.plotly_chart(fig_hist_raw, use_container_width=True)
         
-    with col_b:
-        # Q-Q Plot
-        sorted_noise = np.sort(noise)
-        norm = stats.norm.ppf(np.linspace(0.01, 0.99, len(noise)))
-        fig_qq = px.scatter(x=norm, y=sorted_noise, title="Q-Q Plot: Is the Noise Normal?")
-        fig_qq.add_shape(type="line", x0=min(norm), y0=min(sorted_noise), x1=max(norm), y1=max(sorted_noise),
-                        line=dict(color="Red", dash="dash"))
-        st.plotly_chart(fig_qq, use_container_width=True)
+    with col_right:
+        st.write("**B. Residual 'Noise' Distribution**")
+        st.write("This shows the *true* random risk after removing patterns.")
+        fig_hist_resid = px.histogram(df, x="Residual", nbins=30, color_discrete_sequence=['#38A169'],
+                                     title="Surgical Residuals (The Noise)")
+        st.plotly_chart(fig_hist_resid, use_container_width=True)
 
-    # --- THE FINAL VERDICT ---
-    shapiro_p = stats.shapiro(noise)[1]
-    resid_var = np.var(noise)
-    total_var = np.var(df['Actual'] - df['Trend'])
-    strength = max(0, (1 - (resid_var / total_var)) * 100)
-    
-    st.divider()
-    st.subheader("Statistical Verdict for 'Order Demand'")
-    
-    v1, v2 = st.columns(2)
-    v1.metric("Predictability (Seasonality)", f"{strength:.1f}%")
-    
-    is_normal = shapiro_p > 0.05
-    v2.metric("Noise Consistency (Normality)", "Normal" if is_normal else "Irregular", f"p={shapiro_p:.3f}")
-    
-    if is_normal:
-        st.success("**Ready to Unlock Cash:** Your noise is consistent. Your current Safety Stock is likely over-budgeted for predictable waves.")
+    # Normality Verdict
+    shapiro_p = stats.shapiro(df['Residual'].dropna())[1]
+    if shapiro_p > 0.05:
+        st.success(f"✅ **Verdict:** The Noise is Normal (p={shapiro_p:.3f}). Your inventory risk is predictable.")
     else:
-        st.warning("**Watch for Outliers:** Your noise is irregular. Even after removing patterns, you have unpredictable spikes.")
+        st.warning(f"⚠️ **Verdict:** The Noise is Non-Normal (p={shapiro_p:.3f}). Watch for freak spikes!")
+
+with tab3:
+    st.subheader("12-Month Projected Growth")
+    # Monthly aggregation for a stable forecast
+    df_monthly = data_series.copy()
+    # Assuming daily data for resample; if not date-indexed, we use the raw series
+    model = ExponentialSmoothing(data_series, trend='add', seasonal='add', seasonal_periods=7).fit()
+    forecast = model.forecast(30) # 30-day forecast for daily data
+    
+    fig_forecast = go.Figure()
+    fig_forecast.add_trace(go.Scatter(y=data_series.values, name="History", line=dict(color='#CBD5E0')))
+    fig_forecast.add_trace(go.Scatter(x=np.arange(len(data_series), len(data_series)+30), 
+                                     y=forecast, name="Forecast", line=dict(color='#3182CE', width=4)))
+    st.plotly_chart(fig_forecast, use_container_width=True)
