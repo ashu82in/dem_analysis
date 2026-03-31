@@ -7,79 +7,100 @@ from scipy import stats
 from statsmodels.tsa.seasonal import seasonal_decompose
 
 # --- Page Config ---
-st.set_page_config(page_title="Demand Diagnostics", layout="wide")
+st.set_page_config(page_title="Demand DNA Analyzer", layout="wide")
 
-st.title("🔍 Demand DNA: Normality, Seasonality & Trend")
-st.markdown("Before optimizing inventory, we must understand the 'shape' of your business.")
+st.title("🧬 Demand DNA: The Surgical Diagnostic")
+st.markdown("""
+Standard math checks the **Raw Data** for risk. **We check the 'Noise'.** By removing Trend and Seasonality first, we reveal your *True Unpredictability*.
+""")
 
-# --- Data Input ---
+# --- Sidebar: Data Input ---
+st.sidebar.header("1. Upload Data")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    col = st.sidebar.selectbox("Select Demand Column", df.columns)
-    data = pd.to_numeric(df[col], errors='coerce').dropna().values
+    df_raw = pd.read_csv(uploaded_file)
+    col = st.sidebar.selectbox("Select Demand Column", df_raw.columns)
+    data_series = pd.to_numeric(df_raw[col], errors='coerce').dropna()
 else:
-    # Default Sample Data: Growth Trend + Weekly Seasonality + Noise
+    # Create a "Surgical" Sample: Trend + Season + Normal Noise
     t = np.arange(100)
-    trend = 0.5 * t  # Upward growth
-    seasonal = 10 * np.sin(2 * np.pi * t / 7)  # Weekly wave
-    noise = np.random.normal(0, 5, 100)
-    data = 50 + trend + seasonal + noise
-    st.info("Using sample growth data. Upload your CSV for custom analysis.")
+    data = 50 + (0.5 * t) + (15 * np.sin(2 * np.pi * t / 7)) + np.random.normal(0, 5, 100)
+    data_series = pd.Series(data)
+    st.info("Using sample data (Growth + Weekly Wave). Upload your own for custom analysis.")
 
-df_raw = pd.DataFrame(data, columns=["Demand"])
+# --- 2. The Surgical Decomposition ---
+# We use a 7-day period for weekly business cycles
+decomp = seasonal_decompose(data_series, model='additive', period=7, extrapolate_trend='freq')
 
-# --- 1. THE TREND (The Long-Term Direction) ---
-st.subheader("📈 1. The Trend: Where are you going?")
-# Simple Moving Average to show trend
-df_raw['7-Day MA'] = df_raw['Demand'].rolling(window=7).mean()
-df_raw['30-Day MA'] = df_raw['Demand'].rolling(window=30).mean()
+df = pd.DataFrame({
+    'Actual': data_series.values,
+    'Trend': decomp.trend.values,
+    'Seasonal': decomp.seasonal.values,
+    'Residual': decomp.resid.values
+})
 
-fig_trend = px.line(df_raw, y=['Demand', '7-Day MA', '30-Day MA'], 
-                    title="Raw Demand vs. Smoothed Trends",
-                    color_discrete_map={"Demand": "#CBD5E0", "7-Day MA": "#F6AD55", "30-Day MA": "#3182CE"})
-st.plotly_chart(fig_trend, use_container_width=True)
+# --- 3. Dashboard Tabs ---
+tab1, tab2 = st.tabs(["📉 Step 1: Strip the Patterns", "🔬 Step 2: Analyze the 'Noise' (True Risk)"])
 
-# --- 2. THE SEASONALITY (The Repeating Wave) ---
-st.subheader("🌊 2. The Seasonality: Is it a pattern?")
-if len(data) >= 14:
-    decomp = seasonal_decompose(data, model='additive', period=7, extrapolate_trend='freq')
+with tab1:
+    st.subheader("Peeling the Layers")
+    st.write("We separate your demand into the three layers of the 'Business Sandwich'.")
     
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        fig_sea = px.line(y=decomp.seasonal[:14], title="The 7-Day Isolated Seasonal 'Wave'")
-        fig_sea.update_layout(xaxis_title="Days", yaxis_title="Impact on Sales")
-        st.plotly_chart(fig_sea, use_container_width=True)
-    with col2:
-        # Calculate Strength
-        resid_var = np.var(decomp.resid)
-        total_var = np.var(data - decomp.trend)
-        strength = max(0, (1 - (resid_var / total_var)) * 100)
-        st.metric("Seasonality Strength", f"{strength:.1f}%")
-        st.write("A high percentage means your business is predictable. You can stock 'for the wave'.")
-else:
-    st.warning("Need at least 14 days of data to detect weekly patterns.")
+    # Layered Plot
+    fig_layers = go.Figure()
+    fig_layers.add_trace(go.Scatter(y=df['Actual'], name="1. Raw Demand", line=dict(color='#CBD5E0')))
+    fig_layers.add_trace(go.Scatter(y=df['Trend'], name="2. The Trend (Growth)", line=dict(color='#3182CE', width=4)))
+    fig_layers.add_trace(go.Scatter(y=df['Seasonal'], name="3. The Wave (Seasonality)", line=dict(color='#F6AD55')))
+    
+    fig_layers.update_layout(title="Decomposing your Business Signal", xaxis_title="Days")
+    st.plotly_chart(fig_layers, use_container_width=True)
+    
+    st.info("💡 **Why do this?** If we only looked at 'Raw Demand', the Friday spikes would look like 'Risk'. By peeling them away, we see they are just a 'Pattern'.")
 
-# --- 3. THE NORMALITY (The Statistical Shape) ---
-st.subheader("🔔 3. The Normality: Is it a Bell Curve?")
-col_a, col_b = st.columns(2)
+with tab2:
+    st.subheader("The Residual Analysis (The 'Noise')")
+    st.write("This is what's left after removing the Trend and Seasonality. This is your **True Risk**.")
+    
+    # Clean the residuals for testing
+    noise = df['Residual'].dropna()
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        # Histogram of NOISE
+        fig_hist = px.histogram(noise, nbins=20, title="Distribution of the 'Noise'",
+                                color_discrete_sequence=['#38A169'])
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+    with col_b:
+        # Q-Q Plot of NOISE
+        sorted_noise = np.sort(noise)
+        norm = stats.norm.ppf(np.linspace(0.01, 0.99, len(noise)))
+        fig_qq = px.scatter(x=norm, y=sorted_noise, title="Q-Q Plot: Is the Noise Normal?")
+        fig_qq.add_shape(type="line", x0=min(norm), y0=min(sorted_noise), x1=max(norm), y1=max(sorted_noise),
+                        line=dict(color="Red", dash="dash"))
+        st.plotly_chart(fig_qq, use_container_width=True)
 
-with col_a:
-    fig_hist = px.histogram(df_raw, x="Demand", nbins=20, title="Data Distribution (Histogram)",
-                            color_discrete_sequence=['#3182CE'])
-    st.plotly_chart(fig_hist, use_container_width=True)
-
-with col_b:
-    # Q-Q Plot
-    sorted_data = np.sort(data)
-    norm = stats.norm.ppf(np.linspace(0.01, 0.99, len(data)))
-    fig_qq = px.scatter(x=norm, y=sorted_data, title="Q-Q Plot (Stay on the line for Normality)")
-    fig_qq.add_shape(type="line", x0=min(norm), y0=min(sorted_data), x1=max(norm), y1=max(sorted_data),
-                    line=dict(color="Red", dash="dash"))
-    st.plotly_chart(fig_qq, use_container_width=True)
-
-shapiro_p = stats.shapiro(data)[1]
-if shapiro_p > 0.05:
-    st.success(f"✅ **Normal Distribution Detected (p={shapiro_p:.3f}).** Standard safety stock math works well.")
-else:
-    st.warning(f"⚠️ **Non-Normal Data (p={shapiro_p:.3f}).** Your demand is irregular or 'lumpy'.")
+    # --- THE FINAL VERDICT ---
+    shapiro_p = stats.shapiro(noise)[1]
+    
+    st.divider()
+    st.subheader("The Statistical Verdict")
+    
+    v1, v2 = st.columns(2)
+    
+    # Seasonality Strength
+    resid_var = np.var(noise)
+    total_var = np.var(df['Actual'] - df['Trend'])
+    strength = max(0, (1 - (resid_var / total_var)) * 100)
+    v1.metric("Predictability (Seasonality)", f"{strength:.1f}%")
+    
+    # Normality of Noise
+    is_normal = shapiro_p > 0.05
+    v2.metric("Noise Consistency (Normality)", "Normal" if is_normal else "Irregular", f"p={shapiro_p:.3f}")
+    
+    if is_normal:
+        st.success("**Ready to Unlock Cash:** Your noise is consistent. Standard safety stock math on these residuals will safely minimize your inventory.")
+    else:
+        st.warning("**Proceed with Caution:** Your noise is irregular. Even after removing patterns, you have unpredictable 'freak events'. Keep a slightly higher buffer.")
