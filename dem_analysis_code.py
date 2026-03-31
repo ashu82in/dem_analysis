@@ -8,17 +8,21 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 # --- Page Config ---
-st.set_page_config(page_title="Demand DNA Analyzer", layout="wide")
+st.set_page_config(page_title="Advanced Demand DNA", layout="wide")
 
-st.title("🧬 Demand DNA: Surgical Diagnostic & Histogram Analysis")
+st.title("🧬 Demand DNA: Aggregation & Rolling Normality")
 st.markdown("""
-This tool strips away the **Trend** and **Seasonality** from **Order_Demand** to reveal the **True Noise**. 
-We use Histograms to visualize the "Shape of Risk" before and after the analysis.
+This version **groups multiple orders by day** and **fills gaps with 0**. 
+We also analyze how 'Normal' your demand is across different time windows.
 """)
 
-# --- 1. Sidebar: Data Input ---
+# --- 1. Sidebar: Data & Settings ---
 st.sidebar.header("1. Upload Data")
 uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+
+# Settings for the window check
+st.sidebar.header("2. Analysis Windows")
+norm_window = st.sidebar.slider("Normality Check Window (Days)", 7, 60, 15)
 
 data_series = None
 
@@ -31,89 +35,83 @@ if uploaded_file:
             sheet = st.sidebar.selectbox("Select Sheet", xl.sheet_names)
             df_raw = xl.parse(sheet)
         
-        # Explicitly target "Order_Demand"
+        # 1. Clean Dates and Column
+        df_raw['Date'] = pd.to_datetime(df_raw['Date'], errors='coerce')
+        df_raw = df_raw.dropna(subset=['Date'])
         target_col = "Order_Demand"
-        if target_col in df_raw.columns:
-            col = target_col
-        else:
-            col = st.sidebar.selectbox("Column not found. Select manually:", df_raw.columns)
-            
-        data_series = pd.to_numeric(df_raw[col], errors='coerce').dropna()
         
-        if data_series.empty:
-            st.error(f"The column '{col}' contains no numeric data.")
-            st.stop()
+        # 2. AGGREGATION: Sum up same-day orders
+        df_daily = df_raw.groupby('Date')[target_col].sum().sort_index()
+        
+        # 3. FILLING GAPS: Add 0 for days with no data
+        full_range = pd.date_range(start=df_daily.index.min(), end=df_daily.index.max(), freq='D')
+        data_series = df_daily.reindex(full_range, fill_value=0)
+        
+        st.sidebar.success(f"Aggregated into {len(data_series)} consecutive days.")
             
     except Exception as e:
-        st.error(f"Error loading file: {e}")
+        st.error(f"Error processing file: {e}")
         st.stop()
 else:
-    # Sample Data if no file is uploaded
-    t = np.arange(100)
-    data = 50 + (0.5 * t) + (15 * np.sin(2 * np.pi * t / 7)) + np.random.normal(0, 5, 100)
-    data_series = pd.Series(data)
+    # Sample Data (Trended, Seasonal, with 0s)
+    t = pd.date_range(start="2026-01-01", periods=120)
+    vals = 50 + (0.5 * np.arange(120)) + (20 * np.sin(2 * np.pi * np.arange(120) / 7)) + np.random.normal(0, 10, 120)
+    data_series = pd.Series(vals, index=t).apply(lambda x: max(0, x))
     st.info("💡 Using sample data. Upload your file to analyze 'Order_Demand'.")
 
-# --- 2. Surgical Decomposition ---
-# Using period=7 for weekly cycles
-decomp = seasonal_decompose(data_series, model='additive', period=7, extrapolate_trend='freq')
+# --- 2. Rolling Normality Math ---
+def rolling_normality(series, window):
+    # Calculate Shapiro-Wilk p-value for a sliding window
+    p_values = []
+    for i in range(len(series) - window + 1):
+        window_data = series.iloc[i : i + window]
+        if window_data.std() == 0: # Avoid errors on flat data
+            p_values.append(0)
+        else:
+            _, p = stats.shapiro(window_data)
+            p_values.append(p)
+    return pd.Series(p_values, index=series.index[window - 1 :])
 
-df_results = pd.DataFrame({
-    'Actual': data_series.values,
-    'Trend': decomp.trend.values,
-    'Seasonal': decomp.seasonal.values,
-    'Residual': decomp.resid.values
-})
+rolling_p = rolling_normality(data_series, norm_window)
 
-# --- 3. Dashboard Tabs ---
-tab1, tab2, tab3 = st.tabs(["📉 Step 1: Pattern Surgery", "📊 Step 2: Distribution & Risk", "🔮 Step 3: Forecast"])
+# --- 3. Tabs ---
+tab1, tab2, tab3 = st.tabs(["📈 Aggregated Trend", "🔬 Rolling Normality", "📊 Distribution"])
 
 with tab1:
-    st.subheader("Peeling the Business Layers")
-    fig_layers = go.Figure()
-    fig_layers.add_trace(go.Scatter(y=df_results['Actual'], name="1. Raw Order_Demand", line=dict(color='#CBD5E0', width=1)))
-    fig_layers.add_trace(go.Scatter(y=df_results['Trend'], name="2. Growth Trend", line=dict(color='#3182CE', width=4)))
-    fig_layers.add_trace(go.Scatter(y=df_results['Seasonal'], name="3. Seasonal Wave", line=dict(color='#F6AD55', width=2)))
-    
-    fig_layers.update_layout(title="Order_Demand Decomposition", xaxis_title="Time Index", yaxis_title="Units")
-    st.plotly_chart(fig_layers, use_container_width=True)
+    st.subheader("Total Daily Demand (Aggregated)")
+    st.write("Each point below is the **sum of all orders** for that day, including 0s for quiet days.")
+    fig_trend = px.line(x=data_series.index, y=data_series.values, 
+                        title=f"Total Daily Order_Demand (with 0-filling)",
+                        labels={'x': 'Date', 'y': 'Total Units'})
+    fig_trend.update_traces(line_color='#3182CE')
+    st.plotly_chart(fig_trend, use_container_width=True)
 
 with tab2:
-    st.subheader("The Shape of Risk: Histogram Comparison")
-    st.write("Compare the 'Raw' distribution to the 'Surgical' distribution to see how much risk was actually just a predictable pattern.")
+    st.subheader(f"Rolling {norm_window}-Day Normality Check")
+    st.write(f"This chart shows how 'Normal' the last {norm_window} days were. Values above 0.05 mean the business was statistically stable.")
     
-    col_a, col_b = st.columns(2)
+    fig_p = go.Figure()
+    fig_p.add_trace(go.Scatter(x=rolling_p.index, y=rolling_p.values, name="p-value", line=dict(color='#805AD5')))
+    fig_p.add_hline(y=0.05, line_dash="dash", line_color="red", annotation_text="Normality Threshold (0.05)")
     
-    with col_a:
-        st.markdown("**A. Raw Demand Histogram**")
-        fig_hist_raw = px.histogram(df_results, x="Actual", nbins=30, 
-                                   title="Distribution of Raw Orders",
-                                   color_discrete_sequence=['#CBD5E0'])
-        st.plotly_chart(fig_hist_raw, use_container_width=True)
-        
-    with col_b:
-        st.markdown("**B. Residual Noise Histogram**")
-        fig_hist_resid = px.histogram(df_results, x="Residual", nbins=30, 
-                                     title="Distribution of Surgical Noise",
-                                     color_discrete_sequence=['#38A169'])
-        st.plotly_chart(fig_hist_resid, use_container_width=True)
-
-    # Normality Test Result
-    shapiro_p = stats.shapiro(df_results['Residual'].dropna())[1]
-    st.divider()
-    if shapiro_p > 0.05:
-        st.success(f"✅ **Verdict:** The residual noise follows a **Normal Distribution** (p={shapiro_p:.3f}). Your inventory math is highly reliable.")
-    else:
-        st.warning(f"⚠️ **Verdict:** The noise is **Non-Normal** (p={shapiro_p:.3f}). This indicates 'Fat Tails'—expect more frequent freak spikes than a standard model predicts.")
+    fig_p.update_layout(title=f"Is my demand 'Normal' over {norm_window}-day windows?", yaxis_title="p-value")
+    st.plotly_chart(fig_p, use_container_width=True)
+    
+    st.info("💡 **How to read this:** When the line stays ABOVE the red dash, your demand is predictable (Normal). When it dips BELOW, you are experiencing 'Lumpy' or erratic demand.")
 
 with tab3:
-    st.subheader("12-Month Momentum Forecast")
-    # Simple Holt-Winters for demonstration
-    model = ExponentialSmoothing(data_series, trend='add', seasonal='add', seasonal_periods=7).fit()
-    forecast = model.forecast(30)
+    st.subheader("Distribution Analysis")
+    col1, col2 = st.columns(2)
     
-    fig_fore = go.Figure()
-    fig_fore.add_trace(go.Scatter(y=data_series.values, name="History", line=dict(color='#CBD5E0')))
-    fig_fore.add_trace(go.Scatter(x=np.arange(len(data_series), len(data_series)+30), 
-                                 y=forecast, name="Forecast", line=dict(color='#3182CE', width=4)))
-    st.plotly_chart(fig_fore, use_container_width=True)
+    with col1:
+        st.write("**Histogram (Includes 0-demand days)**")
+        fig_hist = px.histogram(data_series, nbins=30, color_discrete_sequence=['#3182CE'])
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+    with col2:
+        st.write("**Q-Q Plot (Diagnostic)**")
+        sorted_data = np.sort(data_series.values)
+        norm = stats.norm.ppf(np.linspace(0.01, 0.99, len(data_series)))
+        fig_qq = px.scatter(x=norm, y=sorted_data, labels={'x': 'Theoretical', 'y': 'Actual'})
+        fig_qq.add_shape(type="line", x0=min(norm), y0=min(sorted_data), x1=max(norm), y1=max(sorted_data), line=dict(color="Red", dash="dash"))
+        st.plotly_chart(fig_qq, use_container_width=True)
