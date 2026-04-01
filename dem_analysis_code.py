@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 # --- 1. Page Configuration ---
 st.set_page_config(page_title="Universal Supply Chain DNA", layout="wide")
 
-# --- 2. Session State Management (The App's Memory) ---
+# --- 2. Session State Management ---
 if 'sel_w' not in st.session_state: st.session_state.sel_w = 7
 if 'sel_o' not in st.session_state: st.session_state.sel_o = 0
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
@@ -19,17 +19,16 @@ if 'last_file' not in st.session_state: st.session_state.last_file = None
 if 'last_mode' not in st.session_state: st.session_state.last_mode = "Raw Demand"
 if 'last_ignore_zeros' not in st.session_state: st.session_state.last_ignore_zeros = True
 
-st.title("🎯 Universal Demand DNA & Optimizer (Stable v8.0)")
-st.markdown("""
-Identifying the **Best Distribution Match** across all possible windows. 
-This engine tests for **Normal, Lognormal, Gamma, and Poisson** patterns using synchronized math.
-""")
+st.title("🎯 Universal Demand DNA & Optimizer (v9.0)")
 
 # --- 3. Master Sync & DNA Functions ---
 @st.cache_data(show_spinner=False)
-def get_bucketed_data(full_series_values, full_series_index, window, offset, mode, ignore_zeros):
-    """The Single Source of Truth for data slicing. Cached for speed."""
-    full_series = pd.Series(full_series_values, index=full_series_index)
+def get_bucketed_data(_full_series_values, _full_series_index, window, offset, mode, ignore_zeros):
+    """
+    Fixed with leading underscores to prevent UnhashableParamError.
+    Streamlit will now ignore the large index/values when hashing the cache.
+    """
+    full_series = pd.Series(_full_series_values, index=_full_series_index)
     
     # Step 1: Apply Calendar Offset
     start_date = full_series.index.min() + pd.Timedelta(days=offset)
@@ -62,7 +61,7 @@ def run_dna_competition(data):
     # Test Gamma
     try: results.append({'DNA': 'Gamma', 'p_value': kstest(data, 'gamma', args=gamma.fit(data))[1]})
     except: pass
-    # Test Poisson (Requires Integers)
+    # Test Poisson
     try:
         mu = data.mean()
         results.append({'DNA': 'Poisson', 'p_value': kstest(data.astype(int), 'poisson', args=(mu,))[1]})
@@ -76,10 +75,10 @@ uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xl
 
 st.sidebar.header("2. Global Strategy")
 analysis_mode = st.sidebar.selectbox("Analysis Target", ["Raw Demand", "Residuals (Noise Only)"])
-max_test_window = st.sidebar.slider("Max Window to Test (Days)", 7, 30, 30)
-ignore_zeros = st.sidebar.toggle("Ignore Zeros (Active Demand Only)", value=True)
+max_test_window = st.sidebar.slider("Max Window", 7, 30, 30)
+ignore_zeros = st.sidebar.toggle("Ignore Zeros", value=True)
 
-# SENSITIVITY CHECK: Auto-Refresh Simulation if settings change
+# Auto-Refresh check
 if (st.session_state.last_mode != analysis_mode or 
     st.session_state.last_ignore_zeros != ignore_zeros):
     st.session_state.last_mode = analysis_mode
@@ -92,11 +91,11 @@ if st.sidebar.button("🚀 Force Refresh Simulation"):
 target_col = "Order_Demand"
 data_series_daily = None
 
-# --- 5. Data Loading & Cleaning ---
+# --- 5. Data Loading ---
 if uploaded_file:
     if st.session_state.last_file != uploaded_file.name:
         st.session_state.last_file = uploaded_file.name
-        st.session_state.sim_results = None # Reset on new file
+        st.session_state.sim_results = None
         st.session_state.sel_w, st.session_state.sel_o = 7, 0
 
     try:
@@ -128,7 +127,7 @@ def worker(w, o):
 
 if st.session_state.sim_results is None:
     results_list = []
-    with st.spinner(f"Surgically analyzing {analysis_mode} scenarios..."):
+    with st.spinner(f"Analyzing {analysis_mode} scenarios..."):
         with ThreadPoolExecutor() as executor:
             scenarios = [(w, o) for w in range(1, max_test_window + 1) for o in range(w)]
             futures = [executor.submit(worker, w, o) for w, o in scenarios]
@@ -139,7 +138,7 @@ if st.session_state.sim_results is None:
 
 df_opt = st.session_state.sim_results
 
-# --- 7. DASHBOARD TABS ---
+# --- 7. TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["🚀 Global Leaderboard", "🔬 DNA Matcher", "📉 Decomposition", "📊 Buckets"])
 
 with tab1:
@@ -160,9 +159,9 @@ with tab1:
 with tab2:
     st.subheader("🔬 DNA Surgical Matcher")
     c1, c2 = st.columns(2)
-    sel_w = c1.slider("Window Size", 1, max_test_window, value=st.session_state.sel_w, key="w_v8")
+    sel_w = c1.slider("Window Size", 1, max_test_window, value=st.session_state.sel_w, key="w_v9")
     st.session_state.sel_w = sel_w
-    sel_o = c2.slider("Start Offset", 0, sel_w-1, value=st.session_state.sel_o if st.session_state.sel_o < sel_w else 0, key="o_v8") if sel_w > 1 else 0
+    sel_o = c2.slider("Start Offset", 0, sel_w-1, value=st.session_state.sel_o if st.session_state.sel_o < sel_w else 0, key="o_v9") if sel_w > 1 else 0
     st.session_state.sel_o = sel_o
 
     # SYNCED DATA CALL
